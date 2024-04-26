@@ -1,0 +1,410 @@
+<!-- 宣言 -->
+<!DOCTYPE html>
+<!-- 言語指定 -->
+<html lang="en">
+
+<head>
+    <!-- 文字コードの指定 -->
+    <meta charset="UTF-8">
+
+    <!-- デバイスごとに表示領域を設定する，モバイル対応に -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- ページのタイトル -->
+    <title>nEDO chord creation</title>
+
+    <!-- CSSの読み込み，rel="CSSファイルを読み込む宣言",href = "読み込むファイル名" -->
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <!-- 見出し -->
+    <h1>n-EDO chord creation</h1>
+
+    <div id="controls">
+        <label for="division">number of divisions:</label>
+
+        <!-- input要素=数値を入力するためのコントロール,デフォルトは15平均律-->
+        <input type="number" id="division" min="1" max="36" step="1" value="15">
+
+        <!-- generate Scaleボタンがクリックされたときに，generateScale()関数が呼び出される -->
+        <button onclick="generateScale()">generate scale</button>
+    </div>
+
+    <!-- SaveChordボタン -->
+    <button id="save-button">Save Chord</button>
+
+    <!-- CSVファイルのダウンロードボタン -->
+    <button id="download-button">Download CSV File</button>
+
+    <!-- CSVファイルを読み込むボタン -->
+    <button id="import-button">Import CSV File</button>
+
+    <!-- <div id="key"></div> -->
+
+    <!-- 鍵盤を表示するためのコンテナ（javascriptのupdateKeyboardLayout関数で，この要素の中にn平均律鍵盤を生成する） -->
+    <div id="keyboard-container"></div>
+
+    <!-- 周波数を表示するためのコンテナ(javascriptのupdateKeyboardLayout関数で) -->
+    <div id="frequencies"></div>
+
+    <!-- 保存された和音情報を表示する領域 -->
+    <div id="saved-chords"></div>
+
+
+    <!-- //////////以下，JavaScriptのコード////////// -->
+    <script>
+
+        //////定数・変数の宣言
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)(); //Web Audio APIを使用して音声を操作するためのAudio Contextを作成する
+
+        const keyMap = '1234567890QWERTYUIOPASDFGHJKLZXCVBNM'.split(''); //キーボードのキーと対応する周波数をマッピングするためのKeyMapを定義
+
+        let frequencies = []; //生成された周波数を格納する配列
+
+        let oscillators = {}; //オシレータを管理するためのオブジェクト
+
+        let chord = []; //和音を保存するための配列
+
+        let importedFrequencies = []; //CSVファイルに読み込まれた周波数を保存するための配列
+
+
+        //////////------音の再生と停止------//////////
+        ////音の生成と再生(即席のピアノ音をつくる)
+        function startPlayingFrequency(frequency, key) {
+            //２種類の音を作る
+            var oscillator = audioContext.createOscillator();
+            var oscillator2 = audioContext.createOscillator();
+            //２種類目の音は１オクターブ上(Hzが2倍でオクターブ上)
+            oscillator.frequency.value = frequency;
+            oscillator2.frequency.value = frequency * 2;
+            //音量(Gain)変更フィルター
+            var gainNode = audioContext.createGain();
+            var gainNode2 = audioContext.createGain();
+            //音の出始める時刻を取得
+            var currentTime = audioContext.currentTime;
+            //音を線形に音量変化させる
+            gainNode.gain.linearRampToValueAtTime(1, currentTime);
+            gainNode.gain.linearRampToValueAtTime(0, currentTime + 0.6);
+            //2種類目の音は音量を小さく初めて少し長めに
+            gainNode2.gain.linearRampToValueAtTime(0.2, currentTime);
+            gainNode2.gain.linearRampToValueAtTime(0, currentTime + 0.6);
+            //まず音量変更フィルタに作った音を通す
+            oscillator.connect(gainNode);
+            oscillator2.connect(gainNode2);
+            var audioDestination = audioContext.destination;
+            //フィルタに通った音をスピーカーに接続
+            gainNode.connect(audioDestination);
+            gainNode2.connect(audioDestination);
+            oscillator.start = oscillator.start || oscillator.noteOn;
+            oscillator2.start = oscillator2.start || oscillator2.noteOn;
+            oscillator.start();
+            oscillator2.start();
+            oscillators[key] = [oscillator, oscillator2]; //オシレータをosillatorsオブジェクトに保存
+
+            ////入力された音をコンソールに表示
+            console.log("Input frequency:", frequency.toFixed(2)); //小数点第2位で四捨五入した周波数を表示
+
+            ////和音を保存する配列に周波数を追加する
+            chord.push(frequency.toFixed(2));
+
+            // ////----------追加したコード-----------------///////
+            ///////ハイライト表示
+            const noteElements = document.getElementsByClassName('note'); //ページ内すべての鍵盤を取得
+            importedFrequencies.forEach(pair => {
+                if (pair.includes(parseFloat(frequency.toFixed(2)))) { // 現在の周波数がペア内に含まれる場合
+                    pair.forEach(pairFrequency => {
+                        const keyIndex = frequencies.indexOf(parseFloat(pairFrequency)); // ペア内の周波数のインデックスを取得
+                        if (keyIndex !== -1) {
+                            noteElements[keyIndex].style.background = 'red'; // 鍵盤の背景色を赤にする
+                        }
+                    });
+                }
+            });
+        }
+
+        ////音の停止
+        function stopPlayingFrequency(key) {
+            if (oscillators[key]) {
+                oscillators[key][0].stop();
+                oscillators[key][1].stop();
+                oscillators[key][0].disconnect();
+                oscillators[key][1].disconnect();
+                delete oscillators[key];
+            }
+        }
+
+        //////////------キーボードの作成------//////////
+        ////指定された分割数に基づいて，n平均律の音階を生成する関数
+        function generateScale() {
+            //`division`というIDを持つ要素から分割数を取得する．
+            const division = Math.min(document.getElementById('division').value, 31); //最大値は31
+            //基準の周波数の設定
+            const rootFrequency = 440; //A4の周波数
+            //周波数を格納するための空の配列を宣言
+            frequencies = [];
+
+            //n平均律の周波数の計算と割り当て
+            for (let i = 0; i < division; i++) {
+                const frequency = (rootFrequency * Math.pow(2, i / division)).toFixed(2); //計算された周波数を小数点第2位までにする
+                frequencies.push(parseFloat(frequency)); //計算された周波数を，配列に追加
+            }
+
+            //生成された周波数に基づいてキーボードのレイアウトを更新する
+            updateKeyboardLayout(division);
+        }
+
+        ////指定された分割数に基づいてn平均律の鍵盤を動的に生成する関数
+        function updateKeyboardLayout(division) {
+            ////IDの取得
+            const notesDiv = document.getElementById('keyboard-container'); //IDを取得
+            const freqDiv = document.getElementById('frequencies'); //IDを取得
+            ////新しい鍵盤を生成するために，前の鍵盤を削除する
+            notesDiv.innerHTML = ''; //取得した鍵盤の要素をクリア
+            freqDiv.innerHTML = ''; //取得した周波数の要素をクリア
+            ////鍵盤の幅，高さ，間隔の設定
+            const keyWidth = 50; //鍵盤の幅
+            const keyHeight = 200; //鍵盤の高さ
+            const margin = 5; //鍵盤の間隔
+            ////divisionの数だけ，鍵盤を生成する（指定された数の鍵盤を作成するループ)
+            for (let i = 0; i < division; i++) {
+                const x = i * (keyWidth + margin); //鍵盤ごとに横方向に配置
+                const y = 0;
+                const noteDiv = document.createElement('div'); //noteDivという変数を定義
+                noteDiv.className = 'note'; //CSSで記述
+                noteDiv.style.left = `${x}px`;
+                noteDiv.style.top = `${y}px`;
+                noteDiv.style.width = `${keyWidth}px`;
+                noteDiv.style.height = `${keyHeight}px`;
+                noteDiv.style.background = 'white'; //鍵盤の色
+                noteDiv.textContent = keyMap[i];
+                noteDiv.onclick = () => playFrequency(frequencies[i], i); //クリックで音を再生
+                //生成した鍵盤要素をnotesDivに追加
+                notesDiv.appendChild(noteDiv);
+                noteDiv.dataset.frequency = frequencies[i].toFixed(2); //////データ属性に周波数を追加
+            }
+        }
+
+
+        //////////------ボタン制御------//////////
+
+        //////1.和音の保存ボタンのクリックイベントを処理する関数
+
+        ////Save Chordボタンのクリックイベントが発生したときに，saveChord関数が呼び出される
+        document.getElementById("save-button").addEventListener("click", saveChord);
+
+        ////Save Chordボタンのクリックイベントを処理する関数
+        function saveChord() {
+
+            //// 現在のピンク色の表示をクリアする
+            clearPinkHighlights();
+
+            //現在の和音にすでに2つ以上の周波数が含まれている場合，和音として保存
+            if (chord.length >= 2 && chord.length <= 3) { //2つ以上かつ3つ以内の周波数だったら
+
+                //和音の周波数を昇順にソートして識別子に変換
+                const chordIdentifier = chord.sort().join(',');
+
+                //保存された和音情報をコンソールに表示
+                console.log("Save chord: " + chordIdentifier + "Hz");
+
+                //保存された和音情報を表示するための領域を取得する
+                const savedChordsDiv = document.getElementById('saved-chords');
+
+                //保存された和音情報を表示領域に追加
+                const chordDiv = document.createElement('div');
+
+                //chordDiv に保存された和音の情報を表示するテキストを追加
+                chordDiv.textContent = "Save chord(Hz): " + chordIdentifier.split(',').map(freq => freq).join(', '); //chordIdentifier の値を 「,」 で分割し、各周波数の後に「,」を付け加えて表示
+
+                //chordDiv を savedChordsDiv の直下に配置する
+                savedChordsDiv.appendChild(chordDiv); //savedChordsDiv は和音情報を表示するための領域を示し，chordDiv は新しく保存された和音情報を表示するための div 要素
+
+                // 保存された和音の周波数が正しく保存されていることを確認するためにコンソールに出力
+                console.log("Chord frequencies:", chord);
+
+                ////保存された和音に対応する鍵盤をピンク色で表示する
+                const noteElements = document.getElementsByClassName('note'); // ページ内すべての鍵盤を取得
+                chord.forEach(frequency => {
+                    for (let i = 0; i < frequencies.length; i++) {
+                        if (parseFloat(frequency) === frequencies[i]) {
+                            noteElements[i].style.background = 'pink'; // 和音に含まれる鍵盤をピンク色にする
+                        }
+                    }
+                });
+
+            } else { //条件を満たさない場合は
+                console.log("Chord contains less than 2 frequencies. Cannot save.");
+            }
+
+            //次の和音が新しい情報で上書きされるようにする
+            chord = []; //chord配列を初期化
+
+            ///////// ピンク色の表示をクリアする関数
+            function clearPinkHighlights() {
+                const noteElements = document.getElementsByClassName('note'); // ページ内すべての鍵盤を取得
+                for (let i = 0; i < noteElements.length; i++) {
+                    noteElements[i].style.background = 'white'; // ピンク色の表示をクリアして白色に戻す
+                }
+            }
+
+
+        }
+
+
+
+
+        //////2.ダウンロードボタンのクリックイベントを処理する関数
+        ////ダウンロードボタンのクリックイベントが発生したとき，downloadChordCSV関数が呼び出される
+        document.getElementById("download-button").addEventListener("click", downloadChordsCSV);
+
+        ////CSVファイルをダウンロードする関数
+        function downloadChordsCSV() {
+
+            //保存された和音情報を取得
+            const savedChordsDiv = document.getElementById('saved-chords');
+            const savedChords = savedChordsDiv.querySelectorAll('div');
+
+            //和音情報が保存されていない場合は終了
+            if (!savedChords || savedChords.length === 0) {
+                console.log("No chords to download.");
+                return;
+            }
+
+            ////和音情報をCSV形式の文字列に変換する
+            let csvContent = ""; //空の文字列を定義． 後でcsv形式のデータを格納するための変数
+
+            //forEachメソッドを使ってループする．ループの中で，和音情報を含む各要素のテキストコンテンツを取得し，：を区切り点として分割
+            savedChords.forEach(chordDiv => {
+
+                //"Save chord:数値"から数値の部分を取得
+                const chordData = chordDiv.textContent.split(': ')[1];
+
+                //各和音情報を改行で区切ってCSV形式の文字列に追加する.
+                csvContent += chordData + "\n";  //csvContentに取得した数値部分を追加して，改行文字('\n')を付け加えてCSVの文字列にする.
+
+
+            });
+
+            ////CSVファイルのダウンロード用のリンクを作成する
+            //<a>要素(ダウンロード用のリンク)の作成
+            const element = document.createElement('a');
+
+            //作成した<a>要素にhref属性を設定．'data'URLを使用(リンク先のデータを直接URLに含める)．CSVデータをURIエンコードする．
+            element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(csvContent));
+
+            //ユーザがリンクをクリックしたときにファイルがダウンロードできるようにする
+            element.setAttribute('download', 'saved_chords.csv'); //ダウンロード属性の設定，ダウンロードされる名前の指定
+
+            //ページ上にリンクを表示しない
+            element.style.display = 'none'; //リンク要素を非表示に設定
+
+            //<a>要素をページに追加．(これによりリンクが生成され，ダウンロードが可能に)
+            document.body.appendChild(element);
+
+            //リンクをクリックし，ダウンロードを開始する
+            element.click();
+
+            //ダウンロード後にページにリンクが残らないようにする
+            document.body.removeChild(element); //ダウンロード用のリンクを削除する
+
+        }
+
+        ///////3.CSVファイルの読み込みボタンのクリックイベントに関する関数
+        ////importButtonのクリックイベントが発生したときに，importCSV関数が呼び出される
+        document.getElementById("import-button").addEventListener("click", importCSV);
+
+        ////CSVFileを読み込む関数
+        function importCSV() {
+
+            //<input>要素を作成する
+            const input = document.createElement('input');
+
+            input.type = 'file' //inputのタイプをファイル選択に設定
+            input.accept = ',csv'; //ファイルの受け入れタイプをCSVに設定
+
+            //ファイル選択時のイベントハンドラを設定
+            input.onchange = function (event) {
+                const file = event.target.files[0]; //選択されたファイルを取得
+                const reader = new FileReader(); //FileReaderオブジェクトを作成
+                reader.readAsText(file); //選択されたファイルをテキストとして読み込む
+                reader.onload = function (event) { //読み込み完了時のいベンドハンドラを設定
+                    const csvData = event.target.result; //読み込んだCSVデータを取得
+                    processCSV(csvData); //読み込んだCSVデータを処理する関数を呼び出す
+                }
+            }
+
+            //input要素をクリックしてファイルを選択
+            input.click();
+
+        }
+
+
+        ////読み込まれたCSVファイル内の周波数を取得する関数
+        function processCSV(csvData) {
+
+            const rows = csvData.split('\n'); // CSVデータを行ごとに分割
+
+            // 各行を処理して周波数ペアを取得
+            rows.forEach(row => {
+
+                const frequencies = row.trim().split(','); // カンマで分割して周波数ペアを取得
+
+                const frequencyPair = frequencies.map(freq => parseFloat(freq.trim())); // 文字列を浮動小数点数に変換してペアを作成
+
+                importedFrequencies.push(frequencyPair); // CSVから読み込まれた周波数ペアを配列に保存
+
+                console.log('frequency pair:', frequencies); //取得した周波数ペアをコンソールに表示
+
+            });
+
+
+        }
+
+
+
+        //////////------キーボード制御-------//////////
+        ////キーが押されたときに呼び出される関数
+        function handleKeyDown(event) {
+            const key = event.key.toUpperCase(); //イベントから押されたキーを取得し、大文字に変換してkey に格納する。これにより、大文字と小文字のキーの区別をなくす。
+            const keyIndex = keyMap.indexOf(key);
+            if (keyIndex >= 0 && keyIndex < frequencies.length && !oscillators[key]) {
+                startPlayingFrequency(frequencies[keyIndex], key);
+            }
+
+            // 押された鍵盤の色を変更する
+            const noteDiv = document.getElementsByClassName('note')[keyIndex];
+            noteDiv.style.background = 'lightgray'; // 背景色を変更
+            noteDiv.style.border = 'solid black 2px'; // 枠の色を変更
+        }
+
+        ////キーが離されたときに呼び出される関数
+        function handleKeyUp(event) {
+            const notes = document.getElementsByClassName('note');
+            for (let i = 0; i < notes.length; i++) {
+                notes[i].style.border = 'solid black 1px';
+            }
+            const key = event.key.toUpperCase();
+            if (oscillators[key]) {
+                stopPlayingFrequency(key);
+            }
+
+            // 鍵盤の色付けを元に戻す
+            const keyIndex = keyMap.indexOf(key);
+            const noteDiv = document.getElementsByClassName('note')[keyIndex];
+            noteDiv.style.background = 'white'; // 背景色を元に戻す
+            noteDiv.style.border = 'solid black 1px'; // 枠の色を元に戻す
+        }
+
+
+        //////////------初期化------//////////
+        window.onload = () => {
+            generateScale();
+            window.addEventListener('keydown', handleKeyDown);
+            window.addEventListener('keyup', handleKeyUp);
+        };
+
+    </script>
+</body>
+
+</html>
