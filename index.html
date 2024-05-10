@@ -11,7 +11,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <!-- ページのタイトル -->
-    <title>nEDO chord creation</title>
+    <title>nEDO chord creator</title>
 
     <!-- CSSの読み込み，rel="CSSファイルを読み込む宣言",href = "読み込むファイル名" -->
     <link rel="stylesheet" href="style.css">
@@ -19,7 +19,7 @@
 
 <body>
     <!-- 見出し -->
-    <h1>n-EDO chord creation</h1>
+    <h1>n-EDO chord creator</h1>
 
     <div id="controls">
         <label for="division">number of divisions:</label>
@@ -110,7 +110,13 @@
 
             // ////----------追加したコード-----------------///////
             ///////ハイライト表示
+
+            //すべての鍵盤の背景色をリセット
             const noteElements = document.getElementsByClassName('note'); //ページ内すべての鍵盤を取得
+            for (let i = 0; i < noteElements.length; i++) {
+                noteElements[i].style.background = 'white';
+            }
+
             importedFrequencies.forEach(pair => {
                 if (pair.includes(parseFloat(frequency.toFixed(2)))) { // 現在の周波数がペア内に含まれる場合
                     pair.forEach(pairFrequency => {
@@ -121,6 +127,8 @@
                     });
                 }
             });
+
+
         }
 
         ////音の停止
@@ -196,9 +204,6 @@
         ////Save Chordボタンのクリックイベントを処理する関数
         function saveChord() {
 
-            //// 現在のピンク色の表示をクリアする
-            clearPinkHighlights();
-
             //現在の和音にすでに2つ以上の周波数が含まれている場合，和音として保存
             if (chord.length >= 2 && chord.length <= 3) { //2つ以上かつ3つ以内の周波数だったら
 
@@ -239,15 +244,6 @@
 
             //次の和音が新しい情報で上書きされるようにする
             chord = []; //chord配列を初期化
-
-            ///////// ピンク色の表示をクリアする関数
-            function clearPinkHighlights() {
-                const noteElements = document.getElementsByClassName('note'); // ページ内すべての鍵盤を取得
-                for (let i = 0; i < noteElements.length; i++) {
-                    noteElements[i].style.background = 'white'; // ピンク色の表示をクリアして白色に戻す
-                }
-            }
-
 
         }
 
